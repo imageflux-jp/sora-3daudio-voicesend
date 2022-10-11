@@ -1,0 +1,349 @@
+<html lang="ja">
+    <head>
+        <meta charset="utf-8">
+    </head>
+    <body>
+        <table>
+            <tr><td>signalingUrl</td><td><input type="password" id="signalingUrl" value="ws://127.0.0.1:5000/signaling" style="width:320px"></td></tr>
+            <tr><td>channelId</td><td><input type="password" id="channelId" value="sora" style="width:320px"></td></tr>
+        </table>
+        <div id="members" style="display: flex; flex-wrap:wrap"></div>
+        <div id="stage" style="margin: 32px 16px; width:640px; height:320px; box-sizing: border-box; border: black 1px solid; position: relative;"></div>
+        &nbsp;&nbsp;&nbsp;↑上面図(マウスでドラッグすると座標をunityに送ります)
+
+        <script src="https://cdn.jsdelivr.net/npm/sora-js-sdk/dist/sora.min.js"></script>
+        <script type="text/javascript">
+
+const UNITY_SCALE = 100; // Unityの1mに相当するステージピクセル数
+
+// Unityの座標をステージの座標に変換
+// ステージのbottom, horizontalcenterが原点
+// Unity(左手座標系)のZ軸と、htmlの縦軸は正負が逆
+function unity2stagepos(data){
+    let stage = document.getElementById('stage');
+    let stagerect = stage.getBoundingClientRect();
+    let left = data.unity_x * UNITY_SCALE + stagerect.width / 2;
+    let top = -data.unity_z * UNITY_SCALE + stagerect.height;
+    return {left, top};
+}
+
+// マウスの移動量をUnityの座標差分に変換
+function stagediff2unity(x,y){
+    let unity_x = x / UNITY_SCALE;
+    let unity_y = 0 / UNITY_SCALE;
+    let unity_z = -y / UNITY_SCALE;
+    return {unity_x, unity_y, unity_z};
+}
+
+// 画面に表示するテキスト
+function infoText(data){
+    return data.id
+    + " (" + Math.floor(data.unity_x*100)/100.0
+    + ", " + Math.floor(data.unity_y*100)/100.0
+    + ", " + Math.floor(data.unity_z*100)/100.0 + ")";
+}
+
+// 顔を描画する専用のcanvasを生成
+function createFace(color){
+    const WIDTH = 48;
+    let canvas = document.createElement('canvas');
+    canvas.className="face";
+    canvas.width=WIDTH;
+    canvas.height=WIDTH;
+    canvas.style.position="absolute";
+    let context = canvas.getContext('2d');
+    context.fillStyle = color;
+    // context.fillRect(0, 0, WIDTH, WIDTH);
+    context.beginPath();
+    context.arc(WIDTH/2, WIDTH/2, WIDTH*20/48, 0, 2 * Math.PI); // head
+    context.fill();
+    context.beginPath();
+    context.arc(WIDTH/2, WIDTH/10, WIDTH*4/48, 0, 2 * Math.PI); // nose
+    context.fill();
+    context.beginPath();
+    context.arc(WIDTH* 4/48, WIDTH/2, WIDTH*4/48, 0, 2 * Math.PI); // left ear
+    context.arc(WIDTH*44/48, WIDTH/2, WIDTH*4/48, 0, 2 * Math.PI); // right ear
+    context.fill();
+    context.fillStyle = "white";
+    context.beginPath();
+    context.arc(WIDTH* 7/20, WIDTH*10/48, WIDTH*3/48, 0, 2 * Math.PI); // left eye
+    context.arc(WIDTH*13/20, WIDTH*10/48, WIDTH*3/48, 0, 2 * Math.PI); // right eye
+    context.fill();
+    context.strokeStyle = "white";
+    context.lineWidth = WIDTH * 2 / 48;
+    context.beginPath();
+    context.arc(WIDTH* 7/20, WIDTH*10/48, WIDTH*5/48, 1/4 * Math.PI, 3/4 * Math.PI); // left eyebrow
+    context.stroke();
+    context.beginPath();
+    context.arc(WIDTH*13/20, WIDTH*10/48, WIDTH*5/48, 1/4 * Math.PI, 3/4 * Math.PI); // right eyebrow
+    context.stroke();
+    return canvas;
+}
+
+function createPerson(data, index){
+    createPersonInfo(data, index); // 画面上部の四角いボックス
+    createPersonShape(data, index); // ステージ上のキャラクターとドラッグ開始処理
+}
+
+// 画面上部の四角いボックス
+function createPersonInfo(data, index){
+    let person = document.createElement('div');
+    person.id=data.id;
+    person.className="person";
+    person.style="border: black 1px solid; padding: 8px";
+    person.style.backgroundColor=data.colorcode;
+
+    let button1 = document.createElement('button');
+    button1.textContent="入室";
+    button1.className="join";
+    person.appendChild(button1);
+
+    let button2 = document.createElement('button');
+    button2.textContent="退室";
+    button2.className="exit";
+    person.appendChild(button2);
+
+    let select = document.createElement("select");
+    select.style="width:220px;";
+    select.name = "mp3files";
+    select.id = "mp3files"
+    for (const val of window.mp3files)
+    {
+        var option = document.createElement("option");
+        option.value = val;
+        option.text = val;
+        select.appendChild(option);
+    }
+    select.value = data.voice;
+    person.appendChild(select);
+    
+    let audio = document.createElement('audio');
+    audio.autoplay = false;
+    audio.playsinline = true;
+    audio.controls = true;
+    audio.loop = true;
+    audio.muted = true;
+    audio.style="display:block; width: 320px";
+    audio.src = "audiodata/" + data.voice;
+    person.appendChild(audio);
+
+    let info = document.createElement('span');
+    info.innerHTML = infoText(data);
+    info.className="info";
+    person.appendChild(info);
+
+    document.getElementById('members').appendChild(person);
+
+    // 入室ボタンクリック
+    button1.onclick = async()=>{
+        if(data.sora) return;
+        if(!data.source){
+            const audioCtx = new(window.AudioContext || window.webkitAudioContext);
+            data.source = audioCtx.createMediaElementSource(audio);
+            data.destination = audioCtx.createMediaStreamDestination();
+            data.source.connect(data.destination);
+        }
+        audio.muted = false;
+        await audio.play();
+
+        const signalingUrl = document.getElementById("signalingUrl").value;
+        const channelId = document.getElementById("channelId").value;
+        const debug = false;
+        const sora = Sora.connection(signalingUrl, debug);
+        const options = {
+            clientId: data.id,
+            video:false,
+            multistream: true,
+            dataChannelSignaling: true,
+            dataChannels: [{
+                label: "#position",
+                direction: "sendrecv",
+            },],
+        };
+        data.sendPosition = function(){
+            if(!data.sora) return;
+            const senddata = {
+                id: data.id,
+                connectionId: data.sora.connectionId,
+                audioTrackId: data.sora.stream.getAudioTracks()[0].id,
+                color: data.color,
+                x: data.unity_x,
+                y: data.unity_y,
+                z: data.unity_z,
+            }
+            data.sora.sendMessage("#position", new TextEncoder().encode(JSON.stringify(senddata)));
+        };
+        data.sora = sora.sendonly(channelId, null, options);
+        data.sora.on("datachannel", (event) => {
+            data.sendPosition();
+        });
+        if(index==0){
+            data.sora.on("message", (event) => {
+                const recvdata = JSON.parse(new TextDecoder().decode(event.data));
+                console.warn("message event", event.label, recvdata);
+            });
+        }
+        await data.sora.connect(data.destination.stream);
+    };
+    // 退室ボタンクリック
+    button2.onclick = async()=>{
+        if(!data.sora) return;
+        await data.sora.disconnect();
+        data.sora = null;
+    };
+    // 音声ファイル選択
+    select.onchange = (event)=>{
+        data.voice = event.target.value;
+        audio.src = "audiodata/" + data.voice;
+        audio.play();
+    };
+}
+
+// ステージ上のキャラクターとドラッグ開始処理
+function createPersonShape(data, index){
+    let stage = document.getElementById('stage');
+    let shape = createFace(data.colorcode);
+    shape.id=data.id;
+    let pos = unity2stagepos(data);
+    shape.style.left = pos.left;
+    shape.style.top = pos.top;
+    shape.style.transform="translate(-50%, -50%) rotate(180deg)"; // canvasの中心で座標を指定し、中心で回転する
+    stage.appendChild(shape);
+
+    shape.onmousedown = function( event ) {
+        event.preventDefault();
+        let targetid = event.target.id;
+        let data = window.personDatas.find(p=>p.id==targetid);
+        data.dragstart={
+            unity_x: data.unity_x,
+            unity_z: data.unity_z,
+            screenX: event.screenX,
+            screenY: event.screenY,
+        };
+        window.draggingShape = event.target;
+        window.isMouseDown = true;
+    }
+}
+
+// ステージとドラッグ処理
+function initStage(){
+    {
+        let stage = document.getElementById('stage');
+        let stagerect = stage.getBoundingClientRect();
+        let shape = createFace("#795548");
+        shape.id="canvas_listener";
+        shape.style.left = stagerect.width/2;
+        shape.style.top = stagerect.height;
+        shape.style.transform="translate(-50%, -50%)"; // canvasの中心で座標を指定する
+        stage.appendChild(shape);
+    }
+    document.onmouseup = function() {
+        window.isMouseDown = false;
+    };
+    document.onmousemove = function( event ) {
+        if (window.isMouseDown) {
+            let targetid = window.draggingShape.id;
+            let data = window.personDatas.find(p=>p.id==targetid);
+            let diffX = event.screenX - data.dragstart.screenX;
+            let diffY = event.screenY - data.dragstart.screenY;
+            let unity_diff = stagediff2unity(diffX, diffY);
+            data.unity_x = data.dragstart.unity_x + unity_diff.unity_x;
+            data.unity_z = data.dragstart.unity_z + unity_diff.unity_z;
+
+            let pos = unity2stagepos(data);
+            window.draggingShape.style.left = pos.left;
+            window.draggingShape.style.top = pos.top;
+
+            document.querySelector("#"+data.id+".person>.info").innerHTML=infoText(data);
+
+            if(data.sendPosition) data.sendPosition();
+        }
+    };
+}
+
+function saveSession(event){
+    window.sessionStorage[event.target.id] = event.target.value;
+}
+function initForm(){
+    document.getElementById("signalingUrl").value = window.sessionStorage["signalingUrl"] || document.getElementById("signalingUrl").value;
+    document.getElementById("channelId").value = window.sessionStorage["channelId"] || document.getElementById("channelId").value;
+    document.getElementById("signalingUrl").oninput = saveSession;
+    document.getElementById("channelId").oninput = saveSession;
+}
+
+window.mp3files = [
+    "blue_boku_ja-JP-Wavenet-C.mp3",
+    "blue_ore_ja-JP-Wavenet-D.mp3",
+    "blue_warawa_ja-JP-Wavenet-B.mp3",
+    "blue_watashi_ja-JP-Wavenet-A.mp3",
+    "green_boku_ja-JP-Wavenet-C.mp3",
+    "green_ore_ja-JP-Wavenet-D.mp3",
+    "green_warawa_ja-JP-Wavenet-B.mp3",
+    "green_watashi_ja-JP-Wavenet-A.mp3",
+    "kaijin_nijumenso_ja-JP-Wavenet-A.mp3",
+    "kaijin_nijumenso_ja-JP-Wavenet-B.mp3",
+    "kaijin_nijumenso_ja-JP-Wavenet-C.mp3",
+    "kaijin_nijumenso_ja-JP-Wavenet-D.mp3",
+    "ningen_shikkaku_ja-JP-Wavenet-A.mp3",
+    "ningen_shikkaku_ja-JP-Wavenet-B.mp3",
+    "ningen_shikkaku_ja-JP-Wavenet-C.mp3",
+    "ningen_shikkaku_ja-JP-Wavenet-D.mp3",
+    "red_boku_ja-JP-Wavenet-C.mp3",
+    "red_ore_ja-JP-Wavenet-D.mp3",
+    "red_warawa_ja-JP-Wavenet-B.mp3",
+    "red_watashi_ja-JP-Wavenet-A.mp3",
+    "shunkin_sho_ja-JP-Wavenet-A.mp3",
+    "shunkin_sho_ja-JP-Wavenet-B.mp3",
+    "shunkin_sho_ja-JP-Wavenet-C.mp3",
+    "shunkin_sho_ja-JP-Wavenet-D.mp3",
+    "wagahaiwa_nekodearu_ja-JP-Wavenet-A.mp3",
+    "wagahaiwa_nekodearu_ja-JP-Wavenet-B.mp3",
+    "wagahaiwa_nekodearu_ja-JP-Wavenet-C.mp3",
+    "wagahaiwa_nekodearu_ja-JP-Wavenet-D.mp3",
+];
+
+window.personDatas = [
+    {
+        id: "red",
+        color: "red",
+        colorcode: "#F44336",
+        voice: "red_warawa_ja-JP-Wavenet-B.mp3",
+        unity_x: -0.80,
+        unity_y: 0,
+        unity_z: 1.30,
+    },
+    {
+        id: "blue",
+        color: "blue",
+        colorcode: "#2196F3",
+        voice: "blue_boku_ja-JP-Wavenet-C.mp3",
+        unity_x: -0.30,
+        unity_y: 0,
+        unity_z: 2.00,
+    },
+    {
+        id: "green",
+        color: "green",
+        colorcode: "#4CAF50",
+        voice: "green_ore_ja-JP-Wavenet-D.mp3",
+        unity_x: 0.30,
+        unity_y: 0,
+        unity_z: 2.00,
+    },
+    {
+        id: "purple",
+        color: "purple",
+        colorcode: "#9C27B0",
+        voice: "wagahaiwa_nekodearu_ja-JP-Wavenet-A.mp3",
+        unity_x: 0.80,
+        unity_y: 0,
+        unity_z: 1.30,
+    },
+];
+
+initForm();
+initStage();
+window.personDatas.forEach(createPerson);
+</script>
+  </body>
+</html>
