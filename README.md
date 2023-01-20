@@ -1,6 +1,7 @@
 # Sora Unity SDK 3D audio サンプル
 
 [![GitHub tag (latest SemVer)](https://img.shields.io/github/tag/imageflux-jp/sora-3daudio-voicesend.svg)](https://github.com/imageflux-jp/sora-3daudio-voicesend)
+[![Actions Status](https://github.com/imageflux-jp/sora-3daudio-voicesend/actions/workflows/pages/pages-build-deployment/badge.svg)](https://github.com/imageflux-jp/sora-3daudio-voicesend/actions/workflows/pages/pages-build-deployment)
 
 ## デモムービー
 
